@@ -1,71 +1,98 @@
-## WhatsApp Cloud API webhook (Render-ready)
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Voa-Health/tiss/main/.github/images/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Voa-Health/tiss/main/.github/images/logo-light.svg">
+    <img alt="Voa" src="https://raw.githubusercontent.com/Voa-Health/tiss/main/.github/images/logo-light.svg" width="160">
+  </picture>
+</div>
 
-This is a minimal **Node + Express** webhook app intended for Render.
+<div align="center">
+  <h3>Webhook mínimo da WhatsApp Cloud API, pronto para o Render.</h3>
+</div>
 
-It can run in two modes:
-- **Forwarder (recommended for HACS)**: accept Meta WhatsApp webhooks and forward the raw payload (plus `X-Hub-Signature-256`) to your `hacs-api` WhatsApp webhook route.
-- **Dump / Echo bot**: log payloads and optionally echo inbound text messages back (useful for initial Meta verification).
+<br>
 
-### Endpoints
+Um único arquivo Node + Express que responde à verificação da Meta, confere a
+assinatura dos eventos e, conforme a configuração, repassa o payload para outro
+serviço ou responde com eco as mensagens de texto recebidas.
 
-- `GET /` — Meta webhook verification handshake (hub.mode / hub.verify_token / hub.challenge)
-- `POST /` — Receives webhooks, logs payload to Render logs, and returns 200
-- Also available: `GET /webhooks/whatsapp` and `POST /webhooks/whatsapp` (same handlers)
-- Optional: replies `Echo: ...` for inbound `text` messages (echo mode)
+## Início rápido
 
-### Environment variables (Render → Service → Environment)
+```sh
+npm install
+VERIFY_TOKEN=um-valor-qualquer npm start
+```
 
-Required for verification:
-- `VERIFY_TOKEN` (any random string you choose)
+Requer Node 18+. Em desenvolvimento local, as variáveis também podem vir de um
+arquivo `.env`, que o `.gitignore` já ignora.
 
-Optional but recommended:
-- `WHATSAPP_APP_SECRET` (enables `X-Hub-Signature-256` validation)
+```sh
+curl "http://localhost:3000/?hub.mode=subscribe&hub.verify_token=um-valor-qualquer&hub.challenge=123"
+```
 
-Required for forwarding to HACS:
-- `HACS_WEBHOOK_FORWARD_URL` (your deployed `hacs-api` WhatsApp webhook URL)
-  - Example: `https://<your-hacs-api>.onrender.com/webhooks/whatsapp`
+A resposta é `123`, e o log mostra `WEBHOOK VERIFIED`.
 
-Required for echo replies:
-- `WHATSAPP_ACCESS_TOKEN`
-- `WHATSAPP_PHONE_NUMBER_ID`
-- `WHATSAPP_API_VERSION` (default `v22.0`)
+## Como funciona
 
-Control:
-- `WHATSAPP_ECHO_REPLY=0` to disable echo replies
-  - When `HACS_WEBHOOK_FORWARD_URL` is set, echo defaults to **disabled** to avoid double replies (echo + HACS agent).
+| Rota | Uso |
+| --- | --- |
+| `GET /` e `GET /webhooks/whatsapp` | Verificação da Meta com `hub.mode`, `hub.verify_token` e `hub.challenge`. |
+| `POST /` e `POST /webhooks/whatsapp` | Recebe os eventos, registra o payload no log e responde `200`. |
+| `GET /healthz` | Retorna `{"ok": true}`. |
 
-### Deploy on Render (via UI)
+A cada `POST`, o serviço:
 
-1) Create a new GitHub repo and copy these files into it:
-   - `app.js`
-   - `package.json`
-   - `.gitignore`
-   - `README.md`
+1. **Confere** o `X-Hub-Signature-256` com `WHATSAPP_APP_SECRET`, quando
+   definido; assinatura inválida retorna `403`.
+2. **Registra** o payload completo no log do processo.
+3. **Repassa** os bytes originais e o cabeçalho de assinatura para
+   `HACS_WEBHOOK_FORWARD_URL`, quando definida, para que o destino possa
+   verificar a assinatura de novo.
+4. **Responde com eco** (`Echo: <texto>`) às mensagens de texto, se o eco
+   estiver ligado.
 
-2) In Render:
-   - New → Web Service
-   - Connect your repo
-   - Build command: `npm install`
-   - Start command: `npm start`
-   - Add env vars above
+O eco fica desligado por padrão quando há URL de repasse, para evitar respostas
+duplicadas, e ligado quando não há. `WHATSAPP_ECHO_REPLY` força qualquer um dos
+dois comportamentos.
 
-3) In Meta App Dashboard (WhatsApp Webhooks):
-   - Callback URL: `https://<render-service>.onrender.com/`
-   - Verify token: same value as `VERIFY_TOKEN`
-   - Subscribe to `messages`
+> [!WARNING]
+> O payload inteiro vai para o log, inclusive o conteúdo das mensagens. Trate
+> os logs do serviço com o mesmo cuidado que os dados dos usuários.
 
-If verification succeeds, Render logs will show **`WEBHOOK VERIFIED`**.
+## Configuração
 
-### Using with HACS
+| Variável | Uso |
+| --- | --- |
+| `VERIFY_TOKEN` | Obrigatória. Valor escolhido por você e repetido no painel da Meta; `WHATSAPP_VERIFY_TOKEN` é aceita como alternativa. |
+| `WHATSAPP_APP_SECRET` | Recomendada. Segredo do app na Meta; liga a validação de assinatura. |
+| `HACS_WEBHOOK_FORWARD_URL` | URL que recebe o repasse dos eventos. Sem ela, nada é repassado. |
+| `WHATSAPP_ECHO_REPLY` | `0` desliga o eco; qualquer outro valor liga. |
+| `WHATSAPP_ACCESS_TOKEN` | Token da Cloud API, necessário para o eco. |
+| `WHATSAPP_PHONE_NUMBER_ID` | ID do número na Cloud API, necessário para o eco. |
+| `WHATSAPP_API_VERSION` | Versão da Graph API; padrão `v22.0`. |
+| `PORT` | Porta HTTP; padrão `3000`. O Render define automaticamente. |
 
-Set:
-- `HACS_WEBHOOK_FORWARD_URL=https://<your-hacs-api>.onrender.com/webhooks/whatsapp`
-- `WHATSAPP_ECHO_REPLY=0`
+Não há URL de repasse padrão, para que nenhum payload saia para um destino não
+configurado.
 
-On the `hacs-api` deployment, you should also configure `WHATSAPP_APP_SECRET` so the forwarded payload signature can be verified end-to-end.
+## Deploy no Render
 
-### Deploy on Render (optional blueprint)
+O [`render.yaml`](render.yaml) descreve o serviço para o fluxo de Blueprint,
+com eco desligado e as demais variáveis preenchidas no painel. Para criar pela
+interface:
 
-If you prefer Render Blueprints, keep `render.yaml` in the repo and use Render’s “Blueprint” flow.
+1. Crie um **Web Service** a partir deste repositório.
+2. Use `npm install` como build e `npm start` como start.
+3. Defina as variáveis de [Configuração](#configuração).
 
+No painel do app na Meta, em WhatsApp → Configuração do webhook:
 
+1. Informe `https://<seu-servico>.onrender.com/` (ou `/webhooks/whatsapp`) como
+   URL de callback.
+2. Use o mesmo valor de `VERIFY_TOKEN` como token de verificação.
+3. Assine o campo `messages`.
+
+Se a verificação passar, o log do Render mostra `WEBHOOK VERIFIED`.
+
+Ao repassar para outro serviço, configure nele o mesmo `WHATSAPP_APP_SECRET`
+para validar a assinatura de ponta a ponta.
